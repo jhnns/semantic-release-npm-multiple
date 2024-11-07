@@ -1,6 +1,4 @@
-const requireReload = require('require-reload');
-
-const reload = requireReload(require);
+import { spawn, Worker } from 'threads';
 
 // The @semantic-release/npm plugin maintains
 // some state at the module level to decide where to
@@ -8,26 +6,22 @@ const reload = requireReload(require);
 // Because of this, we have to monkey around a bit with
 // Node's require cache in order to create multiple copies
 // of the module in order to use it with different configurations.
-const registryPlugins = {};
-function getChildPlugin(registryName) {
-  let plugin = registryPlugins[registryName];
+const registryPlugins = new Map();
+async function getChildPlugin(registryName) {
+  let plugin = registryPlugins.get(registryName);
   if (!plugin) {
-    plugin = reload('@semantic-release/npm');
-    registryPlugins[registryName] = plugin;
+    plugin = await spawn(new Worker('./child.js'));
+    registryPlugins.set(registryName, plugin);
   }
 
   return plugin;
 }
 
 function createCallbackWrapper(callbackName) {
-  return async ({ registries, ...pluginConfig }, context) => {
-    for (const [registryName, childConfig] of Object.entries(
-      registries || {},
-    )) {
-      const callback = getChildPlugin(registryName)[callbackName];
-      if (!callback) {
-        return;
-      }
+  return async ({ registries = {}, ...pluginConfig }, context) => {
+    for (const [registryName, childConfig] of Object.entries(registries)) {
+      const childPlugin = await getChildPlugin(registryName);
+      const callback = childPlugin[callbackName];
 
       context.logger.log(
         `Performing ${callbackName} for registry ${registryName}`,
@@ -59,9 +53,7 @@ function createCallbackWrapper(callbackName) {
   };
 }
 
-const callbackNames = ['verify', 'prepare', 'publish', 'success', 'fail'];
-
-module.exports = Object.assign(
-  {},
-  ...callbackNames.map(name => ({ [name]: createCallbackWrapper(name) })),
-);
+export const verifyConditions = createCallbackWrapper('verifyConditions');
+export const prepare = createCallbackWrapper('prepare');
+export const publish = createCallbackWrapper('publish');
+export const addChannel = createCallbackWrapper('addChannel');
